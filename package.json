@@ -1,0 +1,12 @@
+{
+  "name": "daily-workout-form",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Offline, single-file calisthenics routine generator and tracker",
+  "scripts": {
+    "test": "node tests/smoke.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.64.1"
+  }
+}
