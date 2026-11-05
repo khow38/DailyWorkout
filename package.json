@@ -4,9 +4,15 @@
   "private": true,
   "description": "Offline, single-file calisthenics routine generator and tracker",
   "scripts": {
-    "test": "node tests/smoke.cjs"
+    "test": "node tests/smoke.cjs",
+    "build": "node scripts/build.mjs",
+    "test:avatar": "node tests/avatar.cjs",
+    "bake:motions": "node scripts/bake-motions.mjs",
+    "bake:portraits": "node scripts/bake-portraits.cjs"
   },
   "devDependencies": {
-    "playwright": "1.64.1"
+    "esbuild": "0.28.2",
+    "playwright": "1.64.1",
+    "three": "0.187.0"
   }
 }
