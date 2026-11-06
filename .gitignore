@@ -4,3 +4,6 @@ playwright-report/
 .DS_Store
 Thumbs.db
 *.log
+assets/private/
+index.private.html
+private-preview.html

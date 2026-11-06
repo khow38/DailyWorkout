@@ -6,6 +6,8 @@
   "scripts": {
     "test": "node tests/smoke.cjs",
     "build": "node scripts/build.mjs",
+    "build:private": "node scripts/build.mjs --private && node scripts/build-private-preview.mjs",
+    "test:private": "node tests/private-avatar.mjs",
     "test:avatar": "node tests/avatar.cjs",
     "bake:motions": "node scripts/bake-motions.mjs",
     "bake:portraits": "node scripts/bake-portraits.cjs"

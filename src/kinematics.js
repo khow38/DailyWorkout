@@ -1,4 +1,5 @@
 import * as T from "three";
+import { normalizePrivateShape } from "./private-shape.js";
 import { trimHeadGeometry, sourcePoint, canonicalPoint } from "./portrait.js";
 import { retargetJointPose } from "./joint-poses.js";
 import {
@@ -37,6 +38,7 @@ export function normalizeBody(input = {}) {
   if (/^#[0-9a-f]{6}$/i.test(input.skin || ""))
     result.skin = input.skin.toLowerCase();
   result.appearance = normalizeAppearance(input.appearance, result.model);
+  result.privateShape = normalizePrivateShape(input.privateShape);
   return result;
 }
 const v = (a) => new T.Vector3(...a),
@@ -251,99 +253,7 @@ export class HumanoidRig {
       mesh.skeleton.calculateInverses();
       mesh.bind(mesh.skeleton, mesh.matrixWorld);
     }
-    this.rest = {};
-    for (const [name, b] of Object.entries(this.bones))
-      this.rest[name] = {
-        position: b.position.clone(),
-        quaternion: b.quaternion.clone(),
-        world: b.getWorldPosition(new T.Vector3()),
-        worldQ: b.getWorldQuaternion(new T.Quaternion()),
-      };
-    this.chains = {};
-    for (const side of ["l", "r"])
-      for (const [type, names, limit] of [
-        ["arm", ["upperarm", "lowerarm", "hand"], 150],
-        ["leg", ["thigh", "calf", "foot"], 155],
-      ]) {
-        const [a, b, c] = names.map((n) => this.bones[n + "_" + side]);
-        const p = [a, b, c].map((n) => n.getWorldPosition(new T.Vector3())),
-          d1 = p[1].clone().sub(p[0]),
-          d2 = p[2].clone().sub(p[1]);
-        let hinge = new T.Vector3().crossVectors(d1, d2).normalize();
-        if (hinge.lengthSq() < 0.1) hinge.copy(type === "leg" ? X : Y);
-        this.chains[type + "_" + side] = {
-          a,
-          b,
-          c,
-          l1: d1.length(),
-          l2: d2.length(),
-          limit,
-          hingeA: hinge
-            .clone()
-            .applyQuaternion(this.rest[a.name].worldQ.clone().invert()),
-          hingeB: hinge
-            .clone()
-            .applyQuaternion(this.rest[b.name].worldQ.clone().invert()),
-        };
-      }
-    const r = this.rest;
-    this.metrics = {
-      height: h,
-      hip: r.pelvis.world.y,
-      shoulder: r.upperarm_l.world.y - r.pelvis.world.y,
-      shoulderX: r.upperarm_l.world.x,
-      hipX: r.thigh_l.world.x,
-      arm: this.chains.arm_l.l1 + this.chains.arm_l.l2,
-      thigh: this.chains.leg_l.l1,
-      shin: this.chains.leg_l.l2,
-      leg: this.chains.leg_l.l1 + this.chains.leg_l.l2,
-      scale: h / 1.75,
-    };
-    this.contactSamples = {};
-    for (const name of ["hand_l", "hand_r", "foot_l", "foot_r"]) {
-      const joint = this.bones[name],
-        side = name.endsWith("_l") ? "_l" : "_r",
-        hand = name.startsWith("hand");
-      const points = [];
-      for (const mesh of this.meshes) {
-        const p = mesh.geometry.attributes.position,
-          ids = mesh.geometry.attributes.skinIndex,
-          weights = mesh.geometry.attributes.skinWeight;
-        for (let i = 0; i < p.count; i++) {
-          let weight = 0;
-          for (let k = 0; k < 4; k++) {
-            const b = mesh.skeleton.bones[ids.array[i * 4 + k]];
-            if (
-              b?.name.endsWith(side) &&
-              (hand
-                ? /hand|index|middle|pinky|ring|thumb/.test(b.name)
-                : /foot|ball/.test(b.name))
-            )
-              weight += weights.array[i * 4 + k];
-          }
-          if (weight > 0.7)
-            points.push(
-              new T.Vector3()
-                .fromBufferAttribute(p, i)
-                .applyMatrix4(mesh.matrixWorld)
-                .sub(this.rest[name].world)
-                .applyQuaternion(this.rest[name].worldQ.clone().invert()),
-            );
-        }
-      }
-      this.contactSamples[name] = points;
-    }
-    this.diagnostics = {};
-    this.metrics.toeY = this.contactTarget("foot_l", {
-      target: [0, 0, 0],
-      surface: 0,
-      pitch: radians(70),
-    }).y;
-    this.metrics.footY = this.contactTarget("foot_l", {
-      target: [0, 0, 0],
-      surface: 0,
-      pitch: 0,
-    }).y;
+    initializeRig(this, h);
   }
   world(name) {
     return this.bones[name].getWorldPosition(new T.Vector3());
@@ -475,15 +385,17 @@ export class HumanoidRig {
       return new T.Quaternion()
         .setFromAxisAngle(Y, end.yaw || 0)
         .multiply(new T.Quaternion().setFromAxisAngle(X, end.pitch || 0))
-        .multiply(this.rest[name].worldQ);
+        .multiply(this.endReference?.[name] || this.rest[name].worldQ);
     const localForward = this.rest["middle_01_" + name.at(-1)].world
       .clone()
       .sub(this.rest[name].world)
       .normalize()
       .applyQuaternion(this.rest[name].worldQ.clone().invert());
-    const localNormal = new T.Vector3(0, -1, 0).applyQuaternion(
-      this.rest[name].worldQ.clone().invert(),
-    );
+    const localNormal =
+      this.palmNormals?.[name]?.clone() ||
+      new T.Vector3(0, -1, 0).applyQuaternion(
+        this.rest[name].worldQ.clone().invert(),
+      );
     return rotationBetweenFrames(
       localForward,
       localNormal,
@@ -506,7 +418,11 @@ export class HumanoidRig {
     if (pose.jointPose)
       pose = {
         ...pose,
-        jointPose: retargetJointPose(pose.jointPose, this.rest),
+        jointPose: retargetJointPose(
+          pose.jointPose,
+          this.rest,
+          this.motionReference,
+        ),
       };
     this.reset();
     this.orientTorso(pose);
@@ -705,4 +621,101 @@ export class HumanoidRig {
     this.diagnostics = diagnostics;
     return diagnostics;
   }
+}
+
+// Shared measured skeleton/contact setup; imported rigs bypass procedural mesh rewriting.
+export function initializeRig(rig, h) {
+  rig.rest = {};
+  for (const [name, b] of Object.entries(rig.bones))
+    rig.rest[name] = {
+      position: b.position.clone(),
+      quaternion: b.quaternion.clone(),
+      world: b.getWorldPosition(new T.Vector3()),
+      worldQ: b.getWorldQuaternion(new T.Quaternion()),
+    };
+  rig.chains = {};
+  for (const side of ["l", "r"])
+    for (const [type, names, limit] of [
+      ["arm", ["upperarm", "lowerarm", "hand"], 150],
+      ["leg", ["thigh", "calf", "foot"], 155],
+    ]) {
+      const [a, b, c] = names.map((n) => rig.bones[n + "_" + side]);
+      const p = [a, b, c].map((n) => n.getWorldPosition(new T.Vector3())),
+        d1 = p[1].clone().sub(p[0]),
+        d2 = p[2].clone().sub(p[1]);
+      let hinge = new T.Vector3().crossVectors(d1, d2).normalize();
+      if (hinge.lengthSq() < 0.1) hinge.copy(type === "leg" ? X : Y);
+      rig.chains[type + "_" + side] = {
+        a,
+        b,
+        c,
+        l1: d1.length(),
+        l2: d2.length(),
+        limit,
+        hingeA: hinge
+          .clone()
+          .applyQuaternion(rig.rest[a.name].worldQ.clone().invert()),
+        hingeB: hinge
+          .clone()
+          .applyQuaternion(rig.rest[b.name].worldQ.clone().invert()),
+      };
+    }
+  const r = rig.rest;
+  rig.metrics = {
+    height: h,
+    hip: r.pelvis.world.y,
+    shoulder: r.upperarm_l.world.y - r.pelvis.world.y,
+    shoulderX: r.upperarm_l.world.x,
+    hipX: r.thigh_l.world.x,
+    arm: rig.chains.arm_l.l1 + rig.chains.arm_l.l2,
+    thigh: rig.chains.leg_l.l1,
+    shin: rig.chains.leg_l.l2,
+    leg: rig.chains.leg_l.l1 + rig.chains.leg_l.l2,
+    scale: h / 1.75,
+  };
+  rig.contactSamples = {};
+  for (const name of ["hand_l", "hand_r", "foot_l", "foot_r"]) {
+    const joint = rig.bones[name],
+      side = name.endsWith("_l") ? "_l" : "_r",
+      hand = name.startsWith("hand");
+    const points = [];
+    for (const mesh of rig.meshes) {
+      const p = mesh.geometry.attributes.position,
+        ids = mesh.geometry.attributes.skinIndex,
+        weights = mesh.geometry.attributes.skinWeight;
+      for (let i = 0; i < p.count; i++) {
+        let weight = 0;
+        for (let k = 0; k < 4; k++) {
+          const b = mesh.skeleton.bones[ids.getComponent(i, k)];
+          if (
+            b?.name.endsWith(side) &&
+            (hand
+              ? /hand|index|middle|pinky|ring|thumb/.test(b.name)
+              : /foot|ball/.test(b.name))
+          )
+            weight += weights.getComponent(i, k);
+        }
+        if (weight > 0.7)
+          points.push(
+            mesh
+              .getVertexPosition(i, new T.Vector3())
+              .applyMatrix4(mesh.matrixWorld)
+              .sub(rig.rest[name].world)
+              .applyQuaternion(rig.rest[name].worldQ.clone().invert()),
+          );
+      }
+    }
+    rig.contactSamples[name] = points;
+  }
+  rig.diagnostics = {};
+  rig.metrics.toeY = rig.contactTarget("foot_l", {
+    target: [0, 0, 0],
+    surface: 0,
+    pitch: radians(70),
+  }).y;
+  rig.metrics.footY = rig.contactTarget("foot_l", {
+    target: [0, 0, 0],
+    surface: 0,
+    pitch: 0,
+  }).y;
 }

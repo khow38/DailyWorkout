@@ -14,7 +14,7 @@ for (const joint of JOINTS) {
 
 // Transfer world-space rotation deltas from the authored bind pose to the
 // selected model's bind axes. Names alone do not imply identical joint frames.
-export function retargetJointPose(input, rest) {
+export function retargetJointPose(input, rest, motionReference = null) {
   const sourcePose = {},
     targetBind = {},
     targetPose = {},
@@ -33,7 +33,7 @@ export function retargetJointPose(input, rest) {
     targetPose[name] = sourcePose[name]
       .clone()
       .multiply(referenceWorld[name].clone().invert())
-      .multiply(targetBind[name]);
+      .multiply(motionReference?.[name] || targetBind[name]);
     rotations[name] = (targetPose[parent]?.clone().invert() || new Quaternion())
       .multiply(targetPose[name])
       .normalize()

@@ -3,6 +3,25 @@ import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const privateBuild = process.argv.includes("--private");
+const privateFiles = privateBuild
+  ? Object.fromEntries(
+      await Promise.all(
+        Object.entries({
+          body: "GF_BaseFull.glb",
+          head: "GF_Head_001.glb",
+          hair: "GF_Hair_204.glb",
+          iris: "iris-masks.webp",
+          brow: "eyebrow.webp",
+        }).map(async ([key, file]) => [
+          key,
+          (
+            await readFile(path.join(root, "assets/private/aion2", file))
+          ).toString("base64"),
+        ]),
+      ),
+    )
+  : null;
 const character = await readFile(path.join(root, "assets/character.glb"));
 const femaleCharacter = await readFile(
   path.join(root, "assets/character-female.glb"),
@@ -55,6 +74,10 @@ const license = await readFile(
   path.join(root, "assets/THREE-LICENSE.txt"),
   "utf8",
 );
+const meshoptLicense = await readFile(
+  path.join(root, "assets/MESHOPT-LICENSE.txt"),
+  "utf8",
+);
 const result = await build({
   entryPoints: [path.join(root, "src/avatar.js")],
   bundle: true,
@@ -66,6 +89,7 @@ const result = await build({
   target: ["chrome100", "safari15"],
   legalComments: "inline",
   define: {
+    __PRIVATE_CHARACTER__: JSON.stringify(privateFiles),
     __CHARACTER_BASE64__: JSON.stringify(character.toString("base64")),
     __FEMALE_CHARACTER_BASE64__: JSON.stringify(
       femaleCharacter.toString("base64"),
@@ -75,14 +99,17 @@ const result = await build({
 const start = "<!-- FORM_AVATAR_START -->",
   end = "<!-- FORM_AVATAR_END -->";
 let html = await readFile(path.join(root, "index.html"), "utf8");
-const script = `${start}\n<script>/*! ${license}\nCharacter: Quaternius Universal Base Characters, CC0 1.0. */\n${result.outputFiles[0].text.replaceAll("</script", "<\\/script")}</script>\n${end}`;
+const script = `${start}\n<script>/*! ${license}\n${meshoptLicense}\n${privateBuild ? "Private local character experiment: Aion 2 assets belong to NCSOFT; not a redistributable build." : "Character: Quaternius Universal Base Characters, CC0 1.0."} */\n${result.outputFiles[0].text.replaceAll("</script", "<\\/script")}</script>\n${end}`;
 if (html.includes(start))
   html =
     html.slice(0, html.indexOf(start)) +
     script +
     html.slice(html.indexOf(end) + end.length);
 else html = html.replace("    <script>", () => script + "\n    <script>");
-await writeFile(path.join(root, "index.html"), html.replaceAll("\r\n", "\n"));
+await writeFile(
+  path.join(root, privateBuild ? "index.private.html" : "index.html"),
+  html.replaceAll("\r\n", "\n"),
+);
 console.log(
   `Built offline avatar: ${(Buffer.byteLength(script) / 1024 / 1024).toFixed(2)} MB; complete app ${(Buffer.byteLength(html) / 1024 / 1024).toFixed(2)} MB`,
 );

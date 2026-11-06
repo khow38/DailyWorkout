@@ -210,6 +210,7 @@ async function main() {
   console.log(
     `PASS ${count} articulated poses across two base meshes × ${bodies.length} body profiles; 65 bones; max fixed-contact error ${(maxError * 1000).toFixed(2)} mm; max kneeling-contact error ${(maxKneeError * 1000).toFixed(2)} mm; stable bind pose`,
   );
+  if (process.argv.includes('--numerical-only')) return;
   const executablePath =
     process.env.BROWSER_PATH ||
     [

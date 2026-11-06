@@ -1,3 +1,9 @@
+import {
+  hasPrivateCharacter,
+  loadPrivateCharacter,
+} from "./imported-character.js";
+export { hasPrivateCharacter };
+export { normalizePrivateShape, privateShapePreset, PRIVATE_SHAPE_FIELDS, PRIVATE_SHAPE_PRESETS } from "./private-shape.js";
 import * as T from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { clone } from "three/addons/utils/SkeletonUtils.js";
@@ -125,7 +131,7 @@ export function mount(host, body = {}, onReady) {
     if (creator && viewMode === "portrait") {
       const center = rig
           .world("Head")
-          .add(new T.Vector3(0, 0.115 * s, 0.015 * s)),
+          .add(new T.Vector3(0, (rig.imported ? 0.065 : 0.115) * s, 0.015 * s)),
         distance = 0.59 * s * Math.max(1, 0.85 / camera.aspect);
       camera.position.set(
         center.x + Math.sin(azimuth) * Math.cos(elevation) * distance,
@@ -311,6 +317,11 @@ export function mount(host, body = {}, onReady) {
   }
   const api = {
     dispose,
+    capture() {
+      if (!alive || !renderer || !rig) throw Error("Character is not ready");
+      renderer.render(scene, camera);
+      return renderer.domElement.toDataURL("image/png");
+    },
     get rig() {
       return rig;
     },
@@ -324,7 +335,7 @@ export function mount(host, body = {}, onReady) {
       setFrame();
     },
     get ready() {
-      return !!rig;
+      return alive && host.dataset.ready === "true";
     },
   };
   host.avatar = api;
@@ -333,7 +344,9 @@ export function mount(host, body = {}, onReady) {
     ?.addEventListener("toggle", setFrame, opts);
   (async () => {
     try {
-      const original = await model(normalizeBody(body).model);
+      const imported =
+        hasPrivateCharacter && normalizeBody(body).model === "female";
+      const original = imported ? null : await model(normalizeBody(body).model);
       if (!alive) return;
       renderer = new T.WebGLRenderer({
         antialias: true,
@@ -346,7 +359,7 @@ export function mount(host, body = {}, onReady) {
       renderer.toneMapping = T.ACESFilmicToneMapping;
       renderer.toneMappingExposure = 1.12;
       renderer.shadowMap.enabled = true;
-      renderer.shadowMap.type = T.PCFSoftShadowMap;
+      renderer.shadowMap.type = T.PCFShadowMap;
       renderer.domElement.setAttribute("aria-hidden", "true");
       stage.replaceChildren(renderer.domElement);
       renderer.domElement.addEventListener(
@@ -364,9 +377,21 @@ export function mount(host, body = {}, onReady) {
       scene = new T.Scene();
       scene.fog = new T.Fog("#151f1c", 7, 14);
       camera = new T.PerspectiveCamera(38, 1, 0.02, 30);
-      const human = clone(original);
+      rig = imported
+        ? await loadPrivateCharacter(body)
+        : new HumanoidRig(clone(original), body);
+      if (!alive) {
+        rig.scene.traverse((o) => {
+          o.geometry?.dispose();
+          for (const m of [].concat(o.material || [])) {
+            for (const v of Object.values(m)) if (v?.isTexture) v.dispose();
+            m.dispose();
+          }
+        });
+        return;
+      }
+      const human = rig.scene;
       scene.add(human);
-      rig = new HumanoidRig(human, body);
       const shades = new T.DataTexture(
         new Uint8Array([80, 120, 158, 190, 222, 255]),
         6,
@@ -376,47 +401,49 @@ export function mount(host, body = {}, onReady) {
       shades.minFilter = shades.magFilter = T.LinearFilter;
       shades.needsUpdate = true;
       disposables.add(shades);
-      const toon = mat(
-        new T.MeshStandardMaterial({
-          vertexColors: true,
-          roughness: 0.82,
-          emissive: new T.Color(rig.body.skin).multiplyScalar(0.12),
-        }),
-      );
-      dressMaterial(toon, rig.body);
-      const outline = mat(
-        new T.MeshBasicMaterial({ color: "#09110e", side: T.BackSide }),
-      );
-      // Extrude the bind mesh before skinning, keeping outlines attached to the same skeleton.
-      outline.onBeforeCompile = (shader) => {
-        shader.vertexShader =
-          "attribute vec3 sourcePosition; varying float vOutlineHeight;\n" +
-          shader.vertexShader;
-        shader.vertexShader = shader.vertexShader.replace(
-          "#include <begin_vertex>",
-          "vec3 transformed = position + normal * 0.00045; vOutlineHeight = sourcePosition.y;",
+      if (!imported) {
+        const toon = mat(
+          new T.MeshStandardMaterial({
+            vertexColors: true,
+            roughness: 0.82,
+            emissive: new T.Color(rig.body.skin).multiplyScalar(0.12),
+          }),
         );
-        shader.fragmentShader =
-          "varying float vOutlineHeight;\n" + shader.fragmentShader;
-        shader.fragmentShader = shader.fragmentShader.replace(
-          "void main() {",
-          "void main() { if (vOutlineHeight > " +
-            (rig.body.model === "female" ? "1.515" : "1.56") +
-            ") discard;",
+        dressMaterial(toon, rig.body);
+        const outline = mat(
+          new T.MeshBasicMaterial({ color: "#09110e", side: T.BackSide }),
         );
-      };
-      for (const mesh of rig.meshes) {
-        mesh.material = toon;
-        mesh.castShadow = true;
-        mesh.frustumCulled = false;
-        const edge = mesh.clone(false);
-        edge.material = outline;
-        edge.skeleton = mesh.skeleton;
-        edge.castShadow = false;
-        edge.renderOrder = -1;
-        mesh.parent.add(edge);
+        // Extrude the bind mesh before skinning, keeping outlines attached to the same skeleton.
+        outline.onBeforeCompile = (shader) => {
+          shader.vertexShader =
+            "attribute vec3 sourcePosition; varying float vOutlineHeight;\n" +
+            shader.vertexShader;
+          shader.vertexShader = shader.vertexShader.replace(
+            "#include <begin_vertex>",
+            "vec3 transformed = position + normal * 0.00045; vOutlineHeight = sourcePosition.y;",
+          );
+          shader.fragmentShader =
+            "varying float vOutlineHeight;\n" + shader.fragmentShader;
+          shader.fragmentShader = shader.fragmentShader.replace(
+            "void main() {",
+            "void main() { if (vOutlineHeight > " +
+              (rig.body.model === "female" ? "1.515" : "1.56") +
+              ") discard;",
+          );
+        };
+        for (const mesh of rig.meshes) {
+          mesh.material = toon;
+          mesh.castShadow = true;
+          mesh.frustumCulled = false;
+          const edge = mesh.clone(false);
+          edge.material = outline;
+          edge.skeleton = mesh.skeleton;
+          edge.castShadow = false;
+          edge.renderOrder = -1;
+          mesh.parent.add(edge);
+        }
+        attachAppearance(rig, shades);
       }
-      attachAppearance(rig, shades);
       scene.add(new T.HemisphereLight("#eff0ff", "#617080", 1.75));
       const fill = new T.DirectionalLight("#bed5ff", 1.1);
       fill.position.set(-3, 2, -2);

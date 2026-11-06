@@ -1,4 +1,6 @@
 import portraits from "../assets/portrait-thumbnails.json";
+import { hasPrivateCharacter } from "./imported-character.js";
+import { normalizePrivateShape, PRIVATE_SHAPE_FIELDS, PRIVATE_SHAPE_PRESETS } from "./private-shape.js";
 import {
   normalizeAppearance,
   STYLE_PRESETS,
@@ -45,6 +47,8 @@ export function presetPortrait(model, id) {
 
 export function creatorFields(body) {
   const a = normalizeAppearance(body.appearance, body.model);
+  if (hasPrivateCharacter && body.model === "female")
+    return privateCreator(body, a);
   return `<div class="studio-customization"><fieldset class="studio-models"><legend>베이스 모델</legend><div>${[
     ["male", "남성"],
     ["female", "여성"],
@@ -82,4 +86,17 @@ export function creatorFields(body) {
       "",
     )}<label class="studio-color"><input type="color" data-body="skin" value="${body.skin}" aria-label="피부 톤"><span>피부 톤</span></label></section>
   </div><div class="studio-footer-note">설정은 이 브라우저에 저장됩니다.</div></div>`;
+}
+
+function privateCreator(body, a) {
+  const shape = normalizePrivateShape(body.privateShape);
+  const tabs = [["presets", "프리셋"], ["face", "얼굴"], ["body", "체형"], ["hair", "컬러"]];
+  const sliders = section => PRIVATE_SHAPE_FIELDS.filter(f => f[5] === section).map(([key, label, min, max]) => `<label class="studio-range"><span>${label}<output data-shape-output="${key}">${shape[key].toFixed(2)}</output></span><input type="range" data-shape="${key}" aria-label="${label}" min="${min}" max="${max}" step="0.01" value="${shape[key]}"><small><span>${min}</span><span>${max}</span></small></label>`).join("");
+  return `<div class="studio-customization"><fieldset class="studio-models"><legend>베이스 모델</legend><div><button type="button" data-model="male" aria-pressed="false">남성</button><button type="button" data-model="female" aria-pressed="true">여성 · 아이온2</button></div></fieldset>
+  <div class="studio-tabs" role="tablist" aria-label="캐릭터 꾸미기">${tabs.map(([id,label], i) => `<button type="button" role="tab" id="studio-tab-${id}" aria-controls="studio-panel-${id}" aria-selected="${!i}" data-studio-tab="${id}">${label}</button>`).join("")}</div><div class="studio-panels">
+  <section class="studio-panel" id="studio-panel-presets" role="tabpanel" aria-labelledby="studio-tab-presets"><div class="studio-section-title"><span>AION 2 / CHARACTER ATELIER</span><h3>원하는 실루엣부터.</h3><p>원본 얼굴을 바탕으로 인상과 체형을 함께 맞췄습니다. 키와 헤어·눈동자 컬러는 유지됩니다.</p></div><div class="face-shapes">${PRIVATE_SHAPE_PRESETS.map(p => `<button type="button" data-shape-preset="${p.id}" aria-pressed="${shape.preset === p.id}"><strong>${p.name}</strong><small>${p.caption}</small></button>`).join("")}</div><div class="studio-tip"><p>프리셋을 고른 뒤 얼굴과 체형 탭에서 더 다듬어 보세요. 전신 보기로 비율을, 운동 보기로 움직임을 확인할 수 있습니다.</p></div></section>
+  <section class="studio-panel" id="studio-panel-face" role="tabpanel" aria-labelledby="studio-tab-face" hidden><div class="studio-section-title"><span>01 / FACE DETAILS</span><h3>원본의 인상에, 나만의 취향.</h3><p>1은 기본 크기, 0은 위치 변화 없음입니다. 눈 크기는 눈꺼풀과 함께 조절됩니다.</p></div><div class="studio-sliders">${sliders("face")}</div></section>
+  <section class="studio-panel" id="studio-panel-body" role="tabpanel" aria-labelledby="studio-tab-body" hidden><div class="studio-section-title"><span>02 / BODY PROPORTIONS</span><h3>팔등신부터 풍성한 실루엣까지.</h3><p>두신 비율이 클수록 머리가 작아 보입니다. 체형에 맞춰 옷과 골격도 함께 조절됩니다.</p></div><label class="studio-select">키 (cm)<input type="number" data-body="height" min="140" max="210" value="${body.height}" inputmode="decimal"></label><div class="studio-sliders">${sliders("body")}</div><div class="studio-tip"><p>체형 값은 캐릭터의 시각적 비율입니다. 실제 신체 치수나 체중의 측정값은 아닙니다.</p></div></section>
+  <section class="studio-panel" id="studio-panel-hair" role="tabpanel" aria-labelledby="studio-tab-hair" hidden><div class="studio-section-title"><span>03 / COLOR PALETTE</span><h3>컬러로 완성하는 분위기.</h3></div>${color("hairColor", "헤어 컬러", a.hairColor)}${color("eyeColor", "눈동자", a.eyeColor)}</section>
+  </div><div class="studio-footer-note">개인 로컬 실험용 · 저장을 누르면 운동 화면에도 적용됩니다.</div></div>`;
 }
